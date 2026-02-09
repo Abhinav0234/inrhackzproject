@@ -13,18 +13,52 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+# Lazy initialization — model is configured when the key is available
+_model = None
 
-# Use gemini-1.5-flash - free tier, fast, and capable
-model = genai.GenerativeModel(
-    model_name="gemini-3-flash",
-    generation_config={
-        "temperature": 0.7,
-        "top_p": 0.95,
-        "max_output_tokens": 1024,
-        "response_mime_type": "application/json",
-    }
-)
+
+def _get_model():
+    """Get or create the Gemini model. Reconfigures if key changed."""
+    global _model
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key or api_key == "your_gemini_api_key_here":
+        raise RuntimeError(
+            "Gemini API key not configured. Please visit /setup to enter your key."
+        )
+    genai.configure(api_key=api_key)
+    if _model is None:
+        _model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash",
+            generation_config={
+                "temperature": 0.7,
+                "top_p": 0.95,
+                "max_output_tokens": 1024,
+                "response_mime_type": "application/json",
+            }
+        )
+    return _model
+
+
+def configure_api_key(api_key):
+    """Reconfigure the Gemini client with a new API key."""
+    global _model
+    os.environ["GEMINI_API_KEY"] = api_key
+    genai.configure(api_key=api_key)
+    _model = genai.GenerativeModel(
+        model_name="gemini-2.0-flash",
+        generation_config={
+            "temperature": 0.7,
+            "top_p": 0.95,
+            "max_output_tokens": 1024,
+            "response_mime_type": "application/json",
+        }
+    )
+
+
+def is_api_key_configured():
+    """Check whether a valid-looking API key is set."""
+    key = os.getenv("GEMINI_API_KEY", "")
+    return bool(key) and key != "your_gemini_api_key_here"
 
 # ----------------------------------------------------------------
 # SYSTEM PROMPTS (Pedagogical Engine)
@@ -118,7 +152,8 @@ def _parse_json_response(text):
 def _call_gemini(system_prompt, user_prompt, temperature=0.7):
     """Unified helper to call Gemini and parse JSON response."""
     try:
-        chat = model.start_chat(history=[])
+        m = _get_model()
+        chat = m.start_chat(history=[])
         full_prompt = system_prompt + "\n\n---\n\n" + user_prompt
         response = chat.send_message(full_prompt)
         result = _parse_json_response(response.text)
@@ -165,7 +200,8 @@ def continue_dialogue(topic, conversation_history, student_response):
     full_prompt = "\n".join(context_parts)
 
     try:
-        chat = model.start_chat(history=[])
+        m = _get_model()
+        chat = m.start_chat(history=[])
         response = chat.send_message(full_prompt)
         result = _parse_json_response(response.text)
         return {"success": True, "data": result}

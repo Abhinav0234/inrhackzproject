@@ -8,7 +8,7 @@ import uuid
 import json
 from datetime import datetime, timezone
 
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, render_template, request, jsonify, session, redirect
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -18,7 +18,9 @@ from services.ai_service import (
     continue_dialogue,
     get_hint,
     generate_session_summary,
-    generate_topic_suggestions
+    generate_topic_suggestions,
+    configure_api_key,
+    is_api_key_configured
 )
 
 load_dotenv()
@@ -38,6 +40,71 @@ with app.app_context():
         stats = LearningStats()
         db.session.add(stats)
         db.session.commit()
+
+
+# ──────────────────────────────────────────────
+# API KEY SETUP
+# ──────────────────────────────────────────────
+
+@app.before_request
+def check_api_key():
+    """Redirect to setup if Gemini API key is not configured."""
+    allowed = ['/setup', '/api/setup', '/static/']
+    if not is_api_key_configured():
+        if not any(request.path.startswith(p) for p in allowed):
+            return redirect('/setup')
+
+
+@app.route('/setup')
+def setup():
+    """API key setup page."""
+    if is_api_key_configured():
+        return redirect('/')
+    return render_template('setup.html')
+
+
+@app.route('/api/setup', methods=['POST'])
+def api_setup():
+    """Save the Gemini API key."""
+    data = request.get_json()
+    api_key = data.get('api_key', '').strip()
+
+    if not api_key:
+        return jsonify({'success': False, 'error': 'API key is required'}), 400
+
+    # Quick validation — try to list models
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        # Light check: just configure and trust it; real validation on first use
+        configure_api_key(api_key)
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Invalid API key: {str(e)}'}), 400
+
+    # Persist to .env file
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    try:
+        if os.path.exists(env_path):
+            with open(env_path, 'r') as f:
+                lines = f.readlines()
+            with open(env_path, 'w') as f:
+                found = False
+                for line in lines:
+                    if line.startswith('GEMINI_API_KEY='):
+                        f.write(f'GEMINI_API_KEY={api_key}\n')
+                        found = True
+                    else:
+                        f.write(line)
+                if not found:
+                    f.write(f'GEMINI_API_KEY={api_key}\n')
+        else:
+            with open(env_path, 'w') as f:
+                f.write(f'GEMINI_API_KEY={api_key}\n')
+    except Exception as e:
+        # Key is in memory even if file write fails
+        pass
+
+    return jsonify({'success': True})
 
 
 # ──────────────────────────────────────────────
